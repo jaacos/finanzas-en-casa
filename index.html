@@ -23,6 +23,11 @@
     <a href="#/analisis" data-r="analisis"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10M12 20V4M19 20v-7"/></svg><span>Análisis</span></a>
     <a href="#/proyectos" data-r="proyectos"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 5.6-7 10-7 10z"/></svg><span>Proyectos</span></a>
   </nav>
+  <script>
+    // Hay que leerlo antes de que la librería limpie la dirección: indica que se viene del enlace de "he olvidado la contraseña"
+    window.__recovery = /type=recovery/.test(location.hash);
+    window.__authError = /error_code=([a-z_]+)/.exec(location.hash)?.[1] || null;
+  </script>
   <script src="vendor/supabase.js"></script>
   <script type="module" src="js/app.js"></script>
 </body>

@@ -16,7 +16,9 @@ function traducir(msg) {
     [/User already registered/i, 'Ese correo ya tiene cuenta. Entra con tu contraseña.'],
     [/Password should be at least/i, 'La contraseña debe tener al menos 6 caracteres.'],
     [/Email not confirmed/i, 'Falta confirmar el correo: revisa tu bandeja de entrada.'],
+    [/email rate limit/i, 'Se han enviado demasiados correos en poco tiempo. Espera una hora y usa solo el correo más reciente.'],
     [/rate limit/i, 'Demasiados intentos seguidos. Espera un minuto.'],
+    [/same password|different from the old/i, 'La contraseña nueva tiene que ser distinta de la anterior.'],
     [/Failed to fetch|NetworkError/i, 'Sin conexión con el servidor. Comprueba internet.'],
   ];
   for (const [re, t] of map) if (re.test(msg)) return t;

@@ -14,6 +14,7 @@ const state = {
   session: null, me: null, household: null, members: [], memberById: new Map(),
   accounts: [], visible: new Set(), categories: [], catById: new Map(), rules: [], sortedRules: [],
   tx: [], loaded: false, projects: [], contributions: [], snapshots: [],
+  recovery: !!window.__recovery,
   month: todayIso().slice(0, 7),
   scope: lsGet('scope') || 'todo',
   path: {},
@@ -25,15 +26,20 @@ function lsSet(k, v) { try { localStorage.setItem('ff-' + k, v); } catch { /* si
 // ---------- Carga ----------
 async function boot() {
   sb.auth.onAuthStateChange((event, session) => {
-    if (event === 'PASSWORD_RECOVERY') { state.session = session; renderNewPassword(); return; }
+    if (event === 'PASSWORD_RECOVERY') { state.session = session; state.recovery = true; renderNewPassword(); return; }
     if (event === 'SIGNED_OUT') { Object.assign(state, { session: null, me: null, loaded: false, tx: [] }); route(); }
   });
   try { state.session = await auth.session(); } catch (e) { toast(e.message, 'error'); }
+  if (/access_token|error_code|type=recovery/.test(location.hash)) history.replaceState(null, '', location.pathname);
+  if (window.__authError) {
+    toast(window.__authError === 'otp_expired' ? 'Ese enlace ya se usó o ha caducado. Usa siempre el correo más reciente.' : 'El enlace del correo no es válido.', 'error');
+  }
   await afterLogin();
 }
 
 async function afterLogin() {
   if (!state.session) return route();
+  if (state.recovery) return renderNewPassword();
   state.me = await loadMe(state.session.user.id);
   if (state.me) await reload();
   route();
@@ -77,6 +83,7 @@ window.addEventListener('hashchange', route);
 function route() {
   view.onclick = null; view.onchange = null; view.oninput = null; view.onsubmit = null;
   if (!state.session) return renderAuth();
+  if (state.recovery) return renderNewPassword();
   if (!state.me) return renderOnboarding();
   const name = location.hash.replace(/^#\/?/, '').split('/')[0];
   const fn = routes[name] || renderInicio;
@@ -134,7 +141,7 @@ function renderAuth() {
   f.querySelector('[data-act=forgot]').onclick = () => busy(null, async () => {
     if (!f.email.value) return toast('Escribe primero tu correo.');
     await auth.resetPassword(f.email.value.trim());
-    toast('Te he enviado un correo para cambiar la contraseña.');
+    toast('Correo enviado. Abre solo el más reciente: los anteriores dejan de valer. Puede tardar unos minutos.');
   });
   f.onsubmit = e => {
     e.preventDefault();
@@ -156,10 +163,36 @@ function renderAuth() {
 function renderNewPassword() {
   nav.hidden = true;
   topbar.innerHTML = '';
-  view.innerHTML = `<form class="card form auth" id="pw"><h2>Nueva contraseña</h2>
+  view.innerHTML = `<form class="card form auth" id="pw"><h2>Elige tu contraseña nueva</h2>
+    <p class="muted small">Has entrado con el enlace del correo. Pon la contraseña que usarás a partir de ahora.</p>
     <label>Contraseña nueva<input type="password" name="pw" minlength="6" autocomplete="new-password" required></label>
-    <button class="btn primary block">Guardar</button></form>`;
-  $('#pw').onsubmit = e => { e.preventDefault(); busy(e.target.querySelector('button'), async () => { await auth.updatePassword(e.target.pw.value); toast('Contraseña cambiada.'); location.hash = ''; await afterLogin(); }); };
+    <label>Repítela<input type="password" name="pw2" minlength="6" autocomplete="new-password" required></label>
+    <button class="btn primary block">Guardar contraseña</button></form>`;
+  $('#pw').onsubmit = e => {
+    e.preventDefault();
+    const f = e.target;
+    if (f.pw.value !== f.pw2.value) return toast('Las dos contraseñas no coinciden.', 'error');
+    busy(f.querySelector('button'), async () => {
+      await auth.updatePassword(f.pw.value);
+      state.recovery = false;
+      toast('Contraseña cambiada. La próxima vez entra con ella.');
+      location.hash = '#/inicio';
+      await afterLogin();
+    });
+  };
+}
+
+function changePassword() {
+  const s = sheet(`<h2>Cambiar contraseña</h2><form class="form" id="cpw">
+    <label>Contraseña nueva<input type="password" name="pw" minlength="6" autocomplete="new-password" required></label>
+    <label>Repítela<input type="password" name="pw2" minlength="6" autocomplete="new-password" required></label>
+    <button class="btn primary block">Guardar</button></form>`);
+  const f = $('#cpw', s.el);
+  f.onsubmit = e => {
+    e.preventDefault();
+    if (f.pw.value !== f.pw2.value) return toast('Las dos contraseñas no coinciden.', 'error');
+    busy(f.querySelector('button'), async () => { await auth.updatePassword(f.pw.value); s.close(); toast('Contraseña cambiada'); });
+  };
 }
 
 function renderOnboarding() {
@@ -1063,6 +1096,7 @@ function renderMas() {
   </ul>
   <ul class="menu card">
     <li><button data-act="backup">${ICON.save}<span>Descargar copia de seguridad</span></button></li>
+    <li><button data-act="pw">${ICON.key}<span>Cambiar contraseña</span></button></li>
     <li><button data-act="logout">${ICON.out}<span>Cerrar sesión</span></button></li>
   </ul>
   <p class="muted center small">Versión ${APP_VERSION} · ${esc(state.session.user.email)}</p>`;
@@ -1070,6 +1104,7 @@ function renderMas() {
     const a = e.target.closest('[data-act]');
     if (!a) return;
     if (a.dataset.act === 'logout') auth.signOut();
+    if (a.dataset.act === 'pw') changePassword();
     if (a.dataset.act === 'backup') {
       const data = {
         exportado: new Date().toISOString(), version: APP_VERSION, hogar: state.household, miembros: state.members,
@@ -1293,6 +1328,7 @@ const ICON = {
   home: svg('<path d="M3 11l9-7 9 7v9H3z"/><path d="M9 20v-6h6v6"/>'),
   save: svg('<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>'),
   out: svg('<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>'),
+  key: svg('<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>'),
   gear: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
 };
 
