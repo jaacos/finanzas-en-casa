@@ -1299,7 +1299,7 @@ function renderHogar() {
   const sd = state.household.month_start_day || 1;
   view.innerHTML = `<form class="card form" id="hf"><label>Nombre del hogar<input name="n" value="${esc(state.household.name)}" required></label>
       <label>El mes empieza el día<select name="sd">${Array.from({ length: 28 }, (_, i) => i + 1).map(d => `<option value="${d}" ${d === sd ? 'selected' : ''}>${d === 1 ? '1 (mes natural)' : d}</option>`).join('')}</select></label>
-      <p class="muted small">Si cobráis a final de mes, pon el día en que suele llegar la nómina (por ejemplo 24). Así el mes «noviembre» irá del 24 de octubre al 23 de noviembre: la nómina y los gastos que paga caen en el mismo mes.</p>
+      <p class="muted small">Si cobráis a final de mes, pon el día en que suele llegar la nómina (por ejemplo 24). Así «octubre» irá del 24 de octubre al 23 de noviembre: la nómina de octubre y los gastos que paga caen en el mismo mes.</p>
       <button class="btn block">Guardar</button></form>
     <section class="card"><h2>Miembros</h2><ul class="list">${state.members.map(m => `<li><span>${esc(m.name)}${m.id === state.me.id ? ' (tú)' : ''}</span></li>`).join('')}</ul></section>
     <section class="card"><h2>Invitar</h2><p>Para que se una otra persona: crea su cuenta en la app y, en «Unirme a un hogar», escribe este código:</p>
