@@ -1,5 +1,5 @@
 // Cálculos de análisis. Gasto en positivo (importe del banco con signo cambiado).
-import { addMonths, monthLabel, eur, pct, BANK_LABEL, periodOf, monthRange } from './ui.js';
+import { addMonths, monthLabel, eur, pct, BANK_LABEL, periodOf, monthRange, periodTitle } from './ui.js';
 import { projectStats, STATUS_LABEL } from './projects.js';
 
 export function scopeAccountIds(state, scope) {
@@ -136,7 +136,7 @@ export function summaryText(state, ym, scope, summaries) {
   const avgTxt = v => v == null ? 'sin meses anteriores con datos' : `media de ${hist} mes${hist > 1 ? 'es' : ''} anterior${hist > 1 ? 'es' : ''}: ${eur(v)}`;
   const scopeName = { todo: 'todas las cuentas que veo', mias: 'mis cuentas', comun: 'cuenta común' }[scope];
   const L = [];
-  L.push(`RESUMEN FINANCIERO — ${monthLabel(ym).toUpperCase()}`);
+  L.push(`RESUMEN FINANCIERO — ${periodTitle(ym).toUpperCase()}`);
   L.push(`Alcance: ${scopeName}. Generado desde la app el ${new Date().toLocaleDateString('es-ES')}.`);
   L.push('');
   L.push(`Ingresos: ${eur(tt.income)} (${avgTxt(avgInc)})`);
@@ -171,7 +171,7 @@ export function summaryText(state, ym, scope, summaries) {
     }
   }
   L.push('');
-  L.push('SALDOS A FIN DE MES:');
+  L.push('SALDOS AL FINAL DEL PERIODO:');
   for (const a of state.accounts.filter(a => !a.archived)) {
     const s = summaries?.find(x => x.account_id === a.id);
     const owner = a.owner_member_id ? state.memberById.get(a.owner_member_id)?.name : 'Común';

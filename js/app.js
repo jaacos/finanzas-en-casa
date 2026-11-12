@@ -1,5 +1,5 @@
 import { sb, auth, loadMe, createHousehold, joinHousehold, loadHousehold, loadTransactions, accountSummaries, api, uploadPhoto, photoUrl, deletePhoto } from './db.js';
-import { $, $$, esc, eur, pct, monthLabel, monthShort, dateLabel, todayIso, addMonths, monthRange, periodOf, periodHint, setMonthStart, monthStart, toast, sheet, confirmBox, busy, download, TYPE_LABEL, BANK_LABEL } from './ui.js';
+import { $, $$, esc, eur, pct, monthLabel, monthShort, dateLabel, todayIso, addMonths, monthRange, periodOf, periodHint, periodTitle, periodShort, periodBounds, periodMode, setPeriodConfig, payrollAnchors, toast, sheet, confirmBox, busy, download, TYPE_LABEL, BANK_LABEL } from './ui.js';
 import { sortRules, suggestPattern, extractMerchant, norm, findRule } from './classify.js';
 import { analyzeFile, commitImport, headerText } from './importer.js';
 import { scopeAccountIds, txOfMonth, totals, breakdown, series, incomeBreakdown, summaryText, inPath, historyMonths } from './analysis.js';
@@ -48,18 +48,33 @@ async function afterLogin() {
 async function reload() {
   const h = await loadHousehold();
   Object.assign(state, h);
-  const prevStart = monthStart();
-  setMonthStart(state.household.month_start_day);
-  if (!state.loaded || prevStart !== monthStart()) state.month = periodOf(todayIso());
   state.memberById = new Map(state.members.map(m => [m.id, m]));
   state.catById = new Map(state.categories.map(c => [c.id, c]));
   state.sortedRules = sortRules(state.rules);
   state.visible = new Set(state.accounts.filter(a => a.owner_member_id == null || a.owner_member_id === state.me.id).map(a => a.id));
   state.tx = await loadTransactions();
+  applyPeriodConfig(!state.loaded);
   state.loaded = true;
 }
 
+// Fechas de las nóminas propias (categoría «Nómina», cuentas de quien mira) para los ciclos de nómina a nómina.
+function payrollDates() {
+  if (!state.me) return [];
+  const cats = new Set(state.categories.filter(c => c.kind === 'ingreso' && /n[oó]mina/i.test(c.name)).map(c => c.id));
+  const mine = new Set(state.accounts.filter(a => a.owner_member_id === state.me.id).map(a => a.id));
+  return state.tx.filter(t => t.tx_type === 'ingreso' && cats.has(t.category_id) && mine.has(t.account_id) && +t.amount >= 300).map(t => t.date);
+}
+
+function applyPeriodConfig(resetMonth) {
+  if (!state.household) return;
+  const before = payrollAnchors().join();
+  setPeriodConfig({ mode: state.household.period_mode, start: state.household.month_start_day, payrolls: payrollDates() });
+  if (resetMonth || (before !== payrollAnchors().join() && !state.monthTouched)) state.month = periodOf(todayIso());
+}
+
 const accById = id => state.accounts.find(a => a.id === id);
+// «mes»/«meses» o «periodo»/«periodos» según cómo se cuente
+const unit = n => periodMode() === 'natural' ? (n === 1 ? 'mes' : 'meses') : (n === 1 ? 'periodo' : 'periodos');
 const myAccounts = () => state.accounts.filter(a => state.visible.has(a.id) && !a.archived);
 const ownerName = a => a.owner_member_id ? (state.memberById.get(a.owner_member_id)?.name ?? '¿?') : 'Común';
 const catName = id => {
@@ -85,6 +100,7 @@ function route() {
   if (!state.session) return renderAuth();
   if (state.recovery) return renderNewPassword();
   if (!state.me) return renderOnboarding();
+  applyPeriodConfig(false);
   const name = location.hash.replace(/^#\/?/, '').split('/')[0];
   const fn = routes[name] || renderInicio;
   nav.hidden = false;
@@ -104,15 +120,15 @@ function periodBar({ scope = true } = {}) {
   const sc = [['todo', 'Todo'], ['mias', 'Mis cuentas'], ['comun', 'Común']];
   return `<div class="period">
     <div class="monthbar"><button class="icon-btn" data-act="prevm" aria-label="Mes anterior">‹</button>
-    <span class="month">${monthLabel(state.month)}${periodHint(state.month) ? `<small>${periodHint(state.month)}</small>` : ''}</span>
+    <span class="month">${periodTitle(state.month)}${periodHint(state.month) ? `<small>${esc(periodHint(state.month))}</small>` : ''}</span>
     <button class="icon-btn" data-act="nextm" aria-label="Mes siguiente">›</button></div>
     ${scope ? `<div class="chips">${sc.map(([k, l]) => `<button class="chip ${state.scope === k ? 'on' : ''}" data-act="scope" data-v="${k}">${l}</button>`).join('')}</div>` : ''}
   </div>`;
 }
 
 function periodActions(a, rerender) {
-  if (a.dataset.act === 'prevm') { state.month = addMonths(state.month, -1); rerender(); return true; }
-  if (a.dataset.act === 'nextm') { state.month = addMonths(state.month, 1); rerender(); return true; }
+  if (a.dataset.act === 'prevm') { state.month = addMonths(state.month, -1); state.monthTouched = true; rerender(); return true; }
+  if (a.dataset.act === 'nextm') { state.month = addMonths(state.month, 1); state.monthTouched = true; rerender(); return true; }
   if (a.dataset.act === 'scope') { state.scope = a.dataset.v; lsSet('scope', state.scope); rerender(); return true; }
   return false;
 }
@@ -233,9 +249,9 @@ async function renderInicio() {
 
   view.innerHTML = `${periodBar()}
     <section class="kpis">
-      <div class="kpi"><span>Ingresos</span><strong class="pos">${eur(t.income)}</strong>${state.month === periodOf(todayIso()) ? `<small>Mes en curso: quedan ${Math.max(0, Math.round((Date.parse(monthRange(state.month)[1]) - Date.parse(todayIso())) / 86400000))} días</small>` : ''}</div>
-      <div class="kpi"><span>Gastos</span><strong>${eur(t.expense)}</strong><small>${avgExp > 0 ? `${pct(t.expense / avgExp - 1)} vs media de ${hist} mes${hist > 1 ? 'es' : ''}` : 'Sin meses anteriores para comparar'}</small></div>
-      <div class="kpi wide ${t.result < 0 ? 'bad' : 'good'}"><span>Resultado del mes</span><strong>${eur(t.result, { sign: true })}</strong><small>${rate != null ? `Tasa de ahorro ${rate} %` : ''}${Math.abs(t.saved) > 0.004 ? ` · Apartado a ahorro ${eur(t.saved)}` : ''}</small></div>
+      <div class="kpi"><span>Ingresos</span><strong class="pos">${eur(t.income)}</strong>${state.month === periodOf(todayIso()) ? `<small>${periodBounds(state.month)[2] ? 'Periodo en curso, hasta la próxima nómina' : `Periodo en curso: quedan ${Math.max(0, Math.round((Date.parse(monthRange(state.month)[1]) - Date.parse(todayIso())) / 86400000))} días`}</small>` : ''}</div>
+      <div class="kpi"><span>Gastos</span><strong>${eur(t.expense)}</strong><small>${avgExp > 0 ? `${pct(t.expense / avgExp - 1)} vs media de ${hist} ${unit(hist)}` : `Sin ${unit(2)} anteriores para comparar`}</small></div>
+      <div class="kpi wide ${t.result < 0 ? 'bad' : 'good'}"><span>${periodMode() === 'natural' ? 'Resultado del mes' : 'Resultado del periodo'}</span><strong>${eur(t.result, { sign: true })}</strong><small>${rate != null ? `Tasa de ahorro ${rate} %` : ''}${Math.abs(t.saved) > 0.004 ? ` · Apartado a ahorro ${eur(t.saved)}` : ''}</small></div>
     </section>
     ${pend.length ? `<a class="card alert" href="#/bandeja"><div><strong>${pend.length} movimiento${pend.length > 1 ? 's' : ''} por revisar</strong><span>No cuentan en los totales hasta que los clasifiques.</span></div>${ICON.chev}</a>` : ''}
     <section class="card">
@@ -289,9 +305,9 @@ async function renderInicio() {
 
 function deltaText(c) {
   if (!c.hist) return '';
-  if (c.avg3 <= 0.005) return c.cur > 0 ? 'Nuevo: no aparece en los meses anteriores' : '';
-  if (c.avg3 < 15) return `Media de ${c.hist} mes${c.hist > 1 ? 'es' : ''}: ${eur(c.avg3)}`;
-  return `${pct(c.cur / c.avg3 - 1)} vs media de ${c.hist} mes${c.hist > 1 ? 'es' : ''} (${eur(c.avg3, { decimals: false })})`;
+  if (c.avg3 <= 0.005) return c.cur > 0 ? `Nuevo: no aparece en los ${unit(2)} anteriores` : '';
+  if (c.avg3 < 15) return `Media de ${c.hist} ${unit(c.hist)}: ${eur(c.avg3)}`;
+  return `${pct(c.cur / c.avg3 - 1)} vs media de ${c.hist} ${unit(c.hist)} (${eur(c.avg3, { decimals: false })})`;
 }
 function deltaClass(c) {
   if (c.avg3 <= 0.005) return 'muted';
@@ -736,8 +752,8 @@ function renderAnalisis() {
   view.innerHTML = `${periodBar()}
     <nav class="crumbs">${crumbs.map(([l, p], i) => i < crumbs.length - 1 ? `<button class="link" data-crumb='${JSON.stringify(p)}'>${esc(l)}</button><span>›</span>` : `<b>${esc(l)}</b>`).join('')}</nav>
     <section class="card">
-      <div class="big"><strong>${eur(cur)}</strong><span>gastado en ${monthLabel(state.month)}</span></div>
-      <p class="muted">Mes anterior ${eur(prev)} · ${hist ? `media de ${hist} mes${hist > 1 ? 'es' : ''} ${eur(avg3)}` : 'sin meses anteriores con datos'} ${avg3 > 0 ? `<b class="${cur > avg3 * 1.15 ? 'neg' : cur < avg3 * 0.85 ? 'pos' : ''}">(${pct(cur / avg3 - 1)})</b>` : ''}</p>
+      <div class="big"><strong>${eur(cur)}</strong><span>gastado ${periodMode() === 'natural' ? 'en ' + monthLabel(state.month) : 'en este periodo'}</span></div>
+      <p class="muted">${periodMode() === 'natural' ? 'Mes anterior' : 'Periodo anterior'} ${eur(prev)} · ${hist ? `media de ${hist} ${unit(hist)} ${eur(avg3)}` : `sin ${unit(2)} anteriores con datos`} ${avg3 > 0 ? `<b class="${cur > avg3 * 1.15 ? 'neg' : cur < avg3 * 0.85 ? 'pos' : ''}">(${pct(cur / avg3 - 1)})</b>` : ''}</p>
       ${chart(ser)}
     </section>
     <section class="card">
@@ -770,7 +786,7 @@ function renderAnalisis() {
 function merchantSheet(path, ids) {
   const list = state.tx.filter(t => ids.has(t.account_id) && periodOf(t.date) === state.month && inPath(state, t, path));
   const ser = series(state, ids, state.month, path);
-  const s = sheet(`<h2>${esc(path.mer)}</h2><p class="muted">${monthLabel(state.month)} · ${list.length} movimientos · ${eur(-sum(list))}</p>
+  const s = sheet(`<h2>${esc(path.mer)}</h2><p class="muted">${periodTitle(state.month)} · ${list.length} movimientos · ${eur(-sum(list))}</p>
     ${chart(ser, true)}
     <div class="sheet-list">${list.map(txRow).join('')}</div>`);
   s.el.onclick = e => { const r = e.target.closest('[data-tx]'); if (r) { s.close(); editTx(r.dataset.tx, renderAnalisis); } };
@@ -784,8 +800,8 @@ function chart(ser, small = false) {
     const h = Math.max(0, (p.value / max) * (H - pad - 14));
     const x = 4 + i * bw + bw * 0.18, y = H - pad - h;
     const last = i === ser.length - 1;
-    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw * 0.64).toFixed(1)}" height="${h.toFixed(1)}" rx="2" class="${last ? 'cur' : ''}"><title>${monthLabel(p.ym)}: ${eur(p.value)}</title></rect>
-      ${i % (small ? 3 : 2) === (ser.length - 1) % (small ? 3 : 2) ? `<text x="${(x + bw * 0.32).toFixed(1)}" y="${H - 4}" text-anchor="middle">${monthShort(p.ym)}</text>` : ''}`;
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw * 0.64).toFixed(1)}" height="${h.toFixed(1)}" rx="2" class="${last ? 'cur' : ''}"><title>${periodTitle(p.ym)}: ${eur(p.value)}</title></rect>
+      ${i % (small ? 3 : 2) === (ser.length - 1) % (small ? 3 : 2) ? `<text x="${(x + bw * 0.32).toFixed(1)}" y="${H - 4}" text-anchor="middle">${periodShort(p.ym)}</text>` : ''}`;
   }).join('');
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Gasto de los últimos 12 meses">${bars}</svg>`;
 }
@@ -1132,7 +1148,7 @@ async function renderResumen() {
     if (!a) return;
     if (periodActions(a, renderResumen)) return;
     if (a.dataset.act === 'copy') navigator.clipboard.writeText(text).then(() => toast('Copiado'), () => { $('#sum').select(); toast('Selecciónalo y cópialo'); });
-    if (a.dataset.act === 'share') navigator.share({ title: `Resumen ${monthLabel(state.month)}`, text }).catch(() => {});
+    if (a.dataset.act === 'share') navigator.share({ title: `Resumen ${periodTitle(state.month)}`, text }).catch(() => {});
   };
 }
 
@@ -1297,18 +1313,24 @@ function renderReglas() {
 function renderHogar() {
   setTop('Hogar');
   const sd = state.household.month_start_day || 1;
+  const pm = state.household.period_mode || 'natural';
+  const anchors = payrollAnchors();
   view.innerHTML = `<form class="card form" id="hf"><label>Nombre del hogar<input name="n" value="${esc(state.household.name)}" required></label>
-      <label>El mes empieza el día<select name="sd">${Array.from({ length: 28 }, (_, i) => i + 1).map(d => `<option value="${d}" ${d === sd ? 'selected' : ''}>${d === 1 ? '1 (mes natural)' : d}</option>`).join('')}</select></label>
-      <p class="muted small">Si cobráis a final de mes, pon el día en que suele llegar la nómina (por ejemplo 24). Así «octubre» irá del 24 de octubre al 23 de noviembre: la nómina de octubre y los gastos que paga caen en el mismo mes.</p>
+      <label>Cómo se cuenta cada periodo<select name="pm">
+        <option value="nomina" ${pm === 'nomina' ? 'selected' : ''}>De nómina a nómina (recomendado)</option>
+        <option value="dia" ${pm === 'dia' ? 'selected' : ''}>Desde un día fijo del mes</option>
+        <option value="natural" ${pm === 'natural' ? 'selected' : ''}>Mes natural (del 1 al 30/31)</option></select></label>
+      <label class="sdfield" ${pm === 'dia' ? '' : 'hidden'}>Día en que empieza<select name="sd">${Array.from({ length: 28 }, (_, i) => i + 1).map(d => `<option value="${d}" ${d === sd ? 'selected' : ''}>${d}</option>`).join('')}</select></label>
+      <p class="muted small">«De nómina a nómina»: cada periodo empieza el día que de verdad entra tu nómina y termina el día antes de la siguiente. Se detecta sola con los ingresos clasificados como «Nómina» en tus cuentas; cada persona del hogar ve sus propios ciclos.${anchors.length ? ` Últimas nóminas detectadas: ${anchors.slice(-3).map(dateLabel).join(', ')}.` : ''}</p>
       <button class="btn block">Guardar</button></form>
     <section class="card"><h2>Miembros</h2><ul class="list">${state.members.map(m => `<li><span>${esc(m.name)}${m.id === state.me.id ? ' (tú)' : ''}</span></li>`).join('')}</ul></section>
     <section class="card"><h2>Invitar</h2><p>Para que se una otra persona: crea su cuenta en la app y, en «Unirme a un hogar», escribe este código:</p>
       <p class="code">${esc(state.household.invite_code)}</p><button class="btn" data-act="copy">Copiar código</button>
       <p class="muted small">Cada uno ve el detalle de sus cuentas y de la común. De las cuentas personales del otro, solo saldo, ingresos y gastos totales.</p></section>`;
+  $('#hf').pm.onchange = e => { $('.sdfield').hidden = e.target.value !== 'dia'; };
   $('#hf').onsubmit = e => { e.preventDefault(); busy(e.target.querySelector('button'), async () => {
-    state.household = await api.update('households', state.household.id, { name: e.target.n.value.trim(), month_start_day: +e.target.sd.value });
-    setMonthStart(state.household.month_start_day);
-    state.month = periodOf(todayIso());
+    state.household = await api.update('households', state.household.id, { name: e.target.n.value.trim(), period_mode: e.target.pm.value, month_start_day: +e.target.sd.value });
+    applyPeriodConfig(true);
     toast('Guardado');
   }); };
   view.onclick = e => { if (e.target.closest('[data-act=copy]')) navigator.clipboard.writeText(state.household.invite_code).then(() => toast('Código copiado')); };

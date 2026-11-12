@@ -48,28 +48,91 @@ export function addMonths(ym, n) {
   const d = new Date(y, m - 1 + n, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
-// Periodo financiero: si el mes empieza el día S (>1), el periodo «octubre» va del S de octubre al S−1 de noviembre
-// (lleva el nombre del mes en que llega la nómina).
-let START = 1;
-export function setMonthStart(d) { START = Math.min(28, Math.max(1, +d || 1)); }
-export function monthStart() { return START; }
-export function periodOf(iso) {
-  const ym = iso.slice(0, 7);
-  if (START === 1) return ym;
-  return +iso.slice(8, 10) >= START ? ym : addMonths(ym, -1);
-}
-export function monthRange(ym) {
-  const [y, m] = ym.split('-').map(Number);
-  if (START === 1) {
-    const last = new Date(y, m, 0).getDate();
-    return [`${ym}-01`, `${ym}-${String(last).padStart(2, '0')}`];
+// ---------- Periodos ----------
+// natural: del 1 al último día del mes.
+// dia:     desde el día fijo S hasta el S−1 del mes siguiente.
+// nomina:  desde el día real en que entra la nómina hasta el día antes de la siguiente.
+// Cada periodo se identifica con una clave 'YYYY-MM' (el mes en que empieza), para poder ir al anterior o al siguiente.
+const DAY_MS = 86400000;
+let MODE = 'natural', START = 1, ANCHORS = [], KEYS = [];
+const isoAdd = (iso, days) => new Date(Date.parse(iso + 'T12:00:00Z') + days * DAY_MS).toISOString().slice(0, 10);
+const dayDiff = (a, b) => Math.round((Date.parse(b + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / DAY_MS);
+
+export function setPeriodConfig({ mode = 'natural', start = 1, payrolls = [] } = {}) {
+  MODE = ['natural', 'dia', 'nomina'].includes(mode) ? mode : 'natural';
+  START = Math.min(28, Math.max(1, +start || 1));
+  // Nóminas separadas al menos 20 días (una paga extra cercana no abre un ciclo nuevo)
+  ANCHORS = [];
+  for (const d of [...payrolls].sort()) if (!ANCHORS.length || dayDiff(ANCHORS.at(-1), d) >= 20) ANCHORS.push(d);
+  KEYS = [];
+  for (const a of ANCHORS) {
+    let k = a.slice(0, 7);
+    if (KEYS.length && k <= KEYS.at(-1)) k = addMonths(KEYS.at(-1), 1);
+    KEYS.push(k);
   }
-  return [`${ym}-${String(START).padStart(2, '0')}`, `${addMonths(ym, 1)}-${String(START - 1).padStart(2, '0')}`];
+  if (MODE === 'nomina' && ANCHORS.length) {
+    const days = ANCHORS.map(a => +a.slice(8, 10)).sort((x, y) => x - y);
+    START = Math.min(28, days[Math.floor(days.length / 2)]); // día habitual de cobro, para meses sin nómina registrada
+  }
 }
-export function periodHint(ym) {
-  if (START === 1) return '';
-  const [a, b] = monthRange(ym);
-  return `${dateLabel(a)} – ${dateLabel(b)}`;
+export function periodMode() { return MODE; }
+export function monthStart() { return START; }
+export function payrollAnchors() { return [...ANCHORS]; }
+
+function byDay(iso) {
+  if (START === 1) return iso.slice(0, 7);
+  return +iso.slice(8, 10) >= START ? iso.slice(0, 7) : addMonths(iso.slice(0, 7), -1);
+}
+function rangeByDay(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  if (START === 1) return [`${ym}-01`, `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`];
+  return [`${ym}-${String(START).padStart(2, '0')}`, isoAdd(`${addMonths(ym, 1)}-${String(START).padStart(2, '0')}`, -1)];
+}
+
+export function periodOf(iso) {
+  if (MODE === 'natural') return iso.slice(0, 7);
+  if (MODE === 'dia' || !ANCHORS.length) return byDay(iso);
+  let i = -1;
+  for (let j = 0; j < ANCHORS.length; j++) if (ANCHORS[j] <= iso) i = j; else break;
+  if (i < 0) return byDay(iso) < KEYS[0] ? byDay(iso) : addMonths(KEYS[0], -1);
+  // Si pasan más de 40 días sin nómina registrada, se vuelve al día habitual
+  if (i === ANCHORS.length - 1 && dayDiff(ANCHORS[i], iso) > 40) return byDay(iso) > KEYS[i] ? byDay(iso) : addMonths(KEYS[i], 1);
+  return KEYS[i];
+}
+
+// [inicio, fin, abierto] del periodo. "abierto" = aún no ha llegado la nómina que lo cierra.
+export function periodBounds(key) {
+  if (MODE === 'nomina' && ANCHORS.length) {
+    const i = KEYS.indexOf(key);
+    if (i >= 0) {
+      if (i + 1 < ANCHORS.length) return [ANCHORS[i], isoAdd(ANCHORS[i + 1], -1), false];
+      const expected = rangeByDay(addMonths(key, 1))[0];
+      const end = expected > isoAdd(ANCHORS[i], 20) ? isoAdd(expected, -1) : isoAdd(ANCHORS[i], 30);
+      return [ANCHORS[i], end, true];
+    }
+  }
+  const [a, b] = rangeByDay(key);
+  return [a, b, false];
+}
+export function monthRange(key) { const [a, b] = periodBounds(key); return [a, b]; }
+
+export function periodTitle(key) {
+  if (MODE === 'natural') { const l = monthLabel(key); return l[0].toUpperCase() + l.slice(1); }
+  const [a, b, open] = periodBounds(key);
+  return `${dateLabel(a)} – ${open ? 'próxima nómina' : dateLabel(b)}`;
+}
+export function periodHint(key) {
+  if (MODE === 'natural') return '';
+  if (MODE === 'nomina' && KEYS.includes(key)) {
+    const [, b, open] = periodBounds(key);
+    return `Nómina de ${monthLabel(key).split(' ')[0]}${open ? ` · la siguiente se espera hacia el ${dateLabel(isoAdd(b, 1))}` : ''}`;
+  }
+  return MODE === 'dia' ? `Mes desde el día ${START}` : `Sin nómina registrada · desde el día ${START}`;
+}
+// Etiqueta corta para gráficos
+export function periodShort(key) {
+  if (MODE === 'natural') return monthShort(key);
+  return dateLabel(periodBounds(key)[0]).replace(/ \d{4}$/, '');
 }
 
 export function toast(msg, kind = '') {
