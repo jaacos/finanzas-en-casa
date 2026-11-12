@@ -1,5 +1,5 @@
 // Cálculos de análisis. Gasto en positivo (importe del banco con signo cambiado).
-import { addMonths, monthLabel, eur, pct, BANK_LABEL } from './ui.js';
+import { addMonths, monthLabel, eur, pct, BANK_LABEL, periodOf, monthRange } from './ui.js';
 import { projectStats, STATUS_LABEL } from './projects.js';
 
 export function scopeAccountIds(state, scope) {
@@ -13,7 +13,7 @@ export function scopeAccountIds(state, scope) {
 }
 
 export function txOfMonth(state, ym, ids) {
-  return state.tx.filter(t => t.date.startsWith(ym) && ids.has(t.account_id));
+  return state.tx.filter(t => periodOf(t.date) === ym && ids.has(t.account_id));
 }
 
 export function totals(txs) {
@@ -57,7 +57,7 @@ export function historyMonths(state, ids, ym) {
   const prev = new Set([addMonths(ym, -1), addMonths(ym, -2), addMonths(ym, -3)]);
   const have = new Set();
   for (const t of state.tx) {
-    const m = t.date.slice(0, 7);
+    const m = periodOf(t.date);
     if (prev.has(m) && ids.has(t.account_id)) have.add(m);
   }
   return have.size;
@@ -71,7 +71,7 @@ export function breakdown(state, ids, ym, path) {
   const acc = new Map();
   for (const t of state.tx) {
     if (t.tx_type !== 'gasto' || !ids.has(t.account_id)) continue;
-    const mi = months.indexOf(t.date.slice(0, 7));
+    const mi = months.indexOf(periodOf(t.date));
     if (mi < 0) continue;
     const k = keyFor(state, t, level, path);
     if (k == null) continue;
@@ -107,7 +107,7 @@ export function series(state, ids, endYm, path, n = 12) {
   const vals = months.map(() => 0);
   for (const t of state.tx) {
     if (!ids.has(t.account_id) || !inPath(state, t, path)) continue;
-    const i = idx.get(t.date.slice(0, 7));
+    const i = idx.get(periodOf(t.date));
     if (i != null) vals[i] -= t.amount;
   }
   months.forEach((m, i) => out.push({ ym: m, value: Math.round(vals[i] * 100) / 100 }));
@@ -178,7 +178,7 @@ export function summaryText(state, ym, scope, summaries) {
     const visible = state.visible.has(a.id);
     let line = `- ${a.alias} (${BANK_LABEL[a.bank]}, ${owner}): saldo ${s?.balance != null ? eur(+s.balance) : 'sin dato'}`;
     if (a.kind === 'inversion') {
-      const snap = (state.snapshots || []).filter(x => x.account_id === a.id && x.date <= `${ym}-31`).sort((x, y) => x.date.localeCompare(y.date)).at(-1);
+      const snap = (state.snapshots || []).filter(x => x.account_id === a.id && x.date <= monthRange(ym)[1]).sort((x, y) => x.date.localeCompare(y.date)).at(-1);
       line = `- ${a.alias} (inversión, ${owner}): ${snap ? `valor ${eur(+snap.value)} a ${snap.date}${snap.invested != null ? `, aportado ${eur(+snap.invested)}` : ''}` : 'sin valor anotado'}`;
     }
     if (!visible && s) line += ` · ingresos ${eur(+s.income)} · gastos ${eur(+s.expense)} (solo totales)`;

@@ -1,5 +1,5 @@
 import { sb, auth, loadMe, createHousehold, joinHousehold, loadHousehold, loadTransactions, accountSummaries, api, uploadPhoto, photoUrl, deletePhoto } from './db.js';
-import { $, $$, esc, eur, pct, monthLabel, monthShort, dateLabel, todayIso, addMonths, monthRange, toast, sheet, confirmBox, busy, download, TYPE_LABEL, BANK_LABEL } from './ui.js';
+import { $, $$, esc, eur, pct, monthLabel, monthShort, dateLabel, todayIso, addMonths, monthRange, periodOf, periodHint, setMonthStart, monthStart, toast, sheet, confirmBox, busy, download, TYPE_LABEL, BANK_LABEL } from './ui.js';
 import { sortRules, suggestPattern, extractMerchant, norm, findRule } from './classify.js';
 import { analyzeFile, commitImport, headerText } from './importer.js';
 import { scopeAccountIds, txOfMonth, totals, breakdown, series, incomeBreakdown, summaryText, inPath, historyMonths } from './analysis.js';
@@ -42,6 +42,9 @@ async function afterLogin() {
 async function reload() {
   const h = await loadHousehold();
   Object.assign(state, h);
+  const prevStart = monthStart();
+  setMonthStart(state.household.month_start_day);
+  if (!state.loaded || prevStart !== monthStart()) state.month = periodOf(todayIso());
   state.memberById = new Map(state.members.map(m => [m.id, m]));
   state.catById = new Map(state.categories.map(c => [c.id, c]));
   state.sortedRules = sortRules(state.rules);
@@ -94,7 +97,7 @@ function periodBar({ scope = true } = {}) {
   const sc = [['todo', 'Todo'], ['mias', 'Mis cuentas'], ['comun', 'Común']];
   return `<div class="period">
     <div class="monthbar"><button class="icon-btn" data-act="prevm" aria-label="Mes anterior">‹</button>
-    <span class="month">${monthLabel(state.month)}</span>
+    <span class="month">${monthLabel(state.month)}${periodHint(state.month) ? `<small>${periodHint(state.month)}</small>` : ''}</span>
     <button class="icon-btn" data-act="nextm" aria-label="Mes siguiente">›</button></div>
     ${scope ? `<div class="chips">${sc.map(([k, l]) => `<button class="chip ${state.scope === k ? 'on' : ''}" data-act="scope" data-v="${k}">${l}</button>`).join('')}</div>` : ''}
   </div>`;
@@ -197,7 +200,7 @@ async function renderInicio() {
 
   view.innerHTML = `${periodBar()}
     <section class="kpis">
-      <div class="kpi"><span>Ingresos</span><strong class="pos">${eur(t.income)}</strong></div>
+      <div class="kpi"><span>Ingresos</span><strong class="pos">${eur(t.income)}</strong>${state.month === periodOf(todayIso()) ? `<small>Mes en curso: quedan ${Math.max(0, Math.round((Date.parse(monthRange(state.month)[1]) - Date.parse(todayIso())) / 86400000))} días</small>` : ''}</div>
       <div class="kpi"><span>Gastos</span><strong>${eur(t.expense)}</strong><small>${avgExp > 0 ? `${pct(t.expense / avgExp - 1)} vs media de ${hist} mes${hist > 1 ? 'es' : ''}` : 'Sin meses anteriores para comparar'}</small></div>
       <div class="kpi wide ${t.result < 0 ? 'bad' : 'good'}"><span>Resultado del mes</span><strong>${eur(t.result, { sign: true })}</strong><small>${rate != null ? `Tasa de ahorro ${rate} %` : ''}${Math.abs(t.saved) > 0.004 ? ` · Apartado a ahorro ${eur(t.saved)}` : ''}</small></div>
     </section>
@@ -284,7 +287,7 @@ function renderMovimientos() {
   const draw = () => {
     const q = norm(movFilter.q);
     let list = state.tx.filter(t => state.visible.has(t.account_id));
-    if (!q) list = list.filter(t => t.date.startsWith(state.month));
+    if (!q) list = list.filter(t => periodOf(t.date) === state.month);
     else list = list.filter(t => norm(`${t.merchant} ${t.raw_desc} ${t.note ?? ''}`).includes(q));
     if (movFilter.account) list = list.filter(t => t.account_id === movFilter.account);
     if (movFilter.type) list = list.filter(t => t.tx_type === movFilter.type);
@@ -732,7 +735,7 @@ function renderAnalisis() {
 }
 
 function merchantSheet(path, ids) {
-  const list = state.tx.filter(t => ids.has(t.account_id) && t.date.startsWith(state.month) && inPath(state, t, path));
+  const list = state.tx.filter(t => ids.has(t.account_id) && periodOf(t.date) === state.month && inPath(state, t, path));
   const ser = series(state, ids, state.month, path);
   const s = sheet(`<h2>${esc(path.mer)}</h2><p class="muted">${monthLabel(state.month)} · ${list.length} movimientos · ${eur(-sum(list))}</p>
     ${chart(ser, true)}
@@ -760,8 +763,8 @@ const activeProjects = () => state.projects.filter(p => !p.archived);
 // Resultado medio mensual (ingresos − gastos) de las cuentas visibles en los meses anteriores con datos.
 function monthlyMargin() {
   const ids = scopeAccountIds(state, 'todo');
-  const cur = todayIso().slice(0, 7);
-  const months = [1, 2, 3].map(i => addMonths(cur, -i)).filter(m => state.tx.some(t => t.date.startsWith(m) && ids.has(t.account_id)));
+  const cur = periodOf(todayIso());
+  const months = [1, 2, 3].map(i => addMonths(cur, -i)).filter(m => state.tx.some(t => periodOf(t.date) === m && ids.has(t.account_id)));
   if (!months.length) return null;
   const sumRes = months.reduce((s, m) => s + totals(txOfMonth(state, m, ids)).result, 0);
   return { avg: sumRes / months.length, n: months.length };
@@ -1258,12 +1261,21 @@ function renderReglas() {
 // ---------- Hogar ----------
 function renderHogar() {
   setTop('Hogar');
-  view.innerHTML = `<form class="card form" id="hf"><label>Nombre del hogar<input name="n" value="${esc(state.household.name)}" required></label><button class="btn block">Guardar</button></form>
+  const sd = state.household.month_start_day || 1;
+  view.innerHTML = `<form class="card form" id="hf"><label>Nombre del hogar<input name="n" value="${esc(state.household.name)}" required></label>
+      <label>El mes empieza el día<select name="sd">${Array.from({ length: 28 }, (_, i) => i + 1).map(d => `<option value="${d}" ${d === sd ? 'selected' : ''}>${d === 1 ? '1 (mes natural)' : d}</option>`).join('')}</select></label>
+      <p class="muted small">Si cobráis a final de mes, pon el día en que suele llegar la nómina (por ejemplo 24). Así el mes «noviembre» irá del 24 de octubre al 23 de noviembre: la nómina y los gastos que paga caen en el mismo mes.</p>
+      <button class="btn block">Guardar</button></form>
     <section class="card"><h2>Miembros</h2><ul class="list">${state.members.map(m => `<li><span>${esc(m.name)}${m.id === state.me.id ? ' (tú)' : ''}</span></li>`).join('')}</ul></section>
     <section class="card"><h2>Invitar</h2><p>Para que se una otra persona: crea su cuenta en la app y, en «Unirme a un hogar», escribe este código:</p>
       <p class="code">${esc(state.household.invite_code)}</p><button class="btn" data-act="copy">Copiar código</button>
       <p class="muted small">Cada uno ve el detalle de sus cuentas y de la común. De las cuentas personales del otro, solo saldo, ingresos y gastos totales.</p></section>`;
-  $('#hf').onsubmit = e => { e.preventDefault(); busy(e.target.querySelector('button'), async () => { state.household = await api.update('households', state.household.id, { name: e.target.n.value.trim() }); toast('Guardado'); }); };
+  $('#hf').onsubmit = e => { e.preventDefault(); busy(e.target.querySelector('button'), async () => {
+    state.household = await api.update('households', state.household.id, { name: e.target.n.value.trim(), month_start_day: +e.target.sd.value });
+    setMonthStart(state.household.month_start_day);
+    state.month = periodOf(todayIso());
+    toast('Guardado');
+  }); };
   view.onclick = e => { if (e.target.closest('[data-act=copy]')) navigator.clipboard.writeText(state.household.invite_code).then(() => toast('Código copiado')); };
 }
 

@@ -342,3 +342,6 @@ small.st-warn { color: var(--warn-ink); } small.st-bad { color: var(--neg); } sm
 .list .link.small { justify-self: start; font-size: .85rem; padding: 2px 0; }
 .drop { position: relative; overflow: hidden; }
 .form .drop input[type=file] { position: absolute !important; left: 0; top: 0; width: 1px !important; height: 1px !important; min-height: 0 !important; padding: 0 !important; margin: 0 !important; border: 0 !important; opacity: 0; }
+
+.monthbar .month { display: grid; text-align: center; }
+.monthbar .month small { font-size: .75rem; font-weight: 500; color: var(--muted); text-transform: none; }

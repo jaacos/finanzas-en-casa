@@ -48,10 +48,28 @@ export function addMonths(ym, n) {
   const d = new Date(y, m - 1 + n, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
+// Periodo financiero: si el mes empieza el día S (>1), el periodo «noviembre» va del S de octubre al S−1 de noviembre.
+let START = 1;
+export function setMonthStart(d) { START = Math.min(28, Math.max(1, +d || 1)); }
+export function monthStart() { return START; }
+export function periodOf(iso) {
+  const ym = iso.slice(0, 7);
+  if (START === 1) return ym;
+  return +iso.slice(8, 10) >= START ? addMonths(ym, 1) : ym;
+}
 export function monthRange(ym) {
   const [y, m] = ym.split('-').map(Number);
-  const last = new Date(y, m, 0).getDate();
-  return [`${ym}-01`, `${ym}-${String(last).padStart(2, '0')}`];
+  if (START === 1) {
+    const last = new Date(y, m, 0).getDate();
+    return [`${ym}-01`, `${ym}-${String(last).padStart(2, '0')}`];
+  }
+  const prev = addMonths(ym, -1);
+  return [`${prev}-${String(START).padStart(2, '0')}`, `${ym}-${String(START - 1).padStart(2, '0')}`];
+}
+export function periodHint(ym) {
+  if (START === 1) return '';
+  const [a, b] = monthRange(ym);
+  return `${dateLabel(a)} – ${dateLabel(b)}`;
 }
 
 export function toast(msg, kind = '') {
