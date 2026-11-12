@@ -4,6 +4,7 @@ import { sortRules, suggestPattern, extractMerchant, norm, findRule } from './cl
 import { analyzeFile, commitImport, headerText } from './importer.js';
 import { scopeAccountIds, txOfMonth, totals, breakdown, series, incomeBreakdown, summaryText, inPath, historyMonths } from './analysis.js';
 import { APP_VERSION } from './config.js';
+import { projectStats, STATUS_LABEL, reservedByAccount, EMOJIS } from './projects.js';
 
 const view = $('#view');
 const nav = $('#nav');
@@ -12,7 +13,7 @@ const topbar = $('#topbar');
 const state = {
   session: null, me: null, household: null, members: [], memberById: new Map(),
   accounts: [], visible: new Set(), categories: [], catById: new Map(), rules: [], sortedRules: [],
-  tx: [], loaded: false,
+  tx: [], loaded: false, projects: [], contributions: [],
   month: todayIso().slice(0, 7),
   scope: lsGet('scope') || 'todo',
   path: {},
@@ -65,6 +66,7 @@ const routes = {
   '': renderInicio, inicio: renderInicio, movimientos: renderMovimientos, analisis: renderAnalisis,
   bandeja: renderBandeja, importar: renderImportar, nuevo: renderNuevo, mas: renderMas, resumen: renderResumen,
   cuentas: renderCuentas, categorias: renderCategorias, reglas: renderReglas, hogar: renderHogar,
+  proyectos: renderProyectos, proyecto: renderProyecto,
 };
 
 window.addEventListener('hashchange', route);
@@ -76,7 +78,7 @@ function route() {
   const name = location.hash.replace(/^#\/?/, '').split('/')[0];
   const fn = routes[name] || renderInicio;
   nav.hidden = false;
-  $$('a', nav).forEach(a => a.classList.toggle('on', a.dataset.r === (name || 'inicio') || (a.dataset.r === 'mas' && ['resumen', 'cuentas', 'categorias', 'reglas', 'hogar'].includes(name))));
+  $$('a', nav).forEach(a => a.classList.toggle('on', a.dataset.r === (name || 'inicio') || (a.dataset.r === 'proyectos' && name === 'proyecto')));
   window.scrollTo(0, 0);
   fn();
 }
@@ -177,7 +179,7 @@ function renderOnboarding() {
 
 // ---------- Inicio ----------
 async function renderInicio() {
-  setTop(state.household.name, `<button class="icon-btn" data-go="#/importar" aria-label="Importar extracto">${ICON.upload}</button>`);
+  setTop(state.household.name, `<button class="icon-btn" data-go="#/importar" aria-label="Importar extracto">${ICON.upload}</button><button class="icon-btn" data-go="#/mas" aria-label="Ajustes y más">${ICON.gear}</button>`);
   if (!myAccounts().length) {
     view.innerHTML = `<div class="empty card"><h2>Añade tus cuentas</h2><p>Antes de importar, crea las cuentas: tu banco, la común, Revolut…</p><a class="btn primary" href="#/cuentas">Añadir cuentas</a></div>`;
     return;
@@ -207,6 +209,7 @@ async function renderInicio() {
         <div class="bar"><i style="width:${Math.max(2, (c.cur / maxCat) * 100)}%"></i></div>
         <small class="${deltaClass(c)}">${deltaText(c)}</small></li>`).join('')}</ul>` : '<p class="muted">Sin gastos clasificados este mes.</p>'}
     </section>
+    ${projectsCard()}
     <section class="card" id="saldos"><div class="card-h"><h2>Cuentas</h2></div><p class="muted">Cargando…</p></section>
     <div class="row-btns"><a class="btn" href="#/importar">${ICON.upload} Importar extracto</a><a class="btn" href="#/resumen">${ICON.doc} Resumen del mes</a></div>`;
 
@@ -223,11 +226,14 @@ async function renderInicio() {
     const sums = await accountSummaries(from, to);
     const box = $('#saldos');
     if (!box) return;
+    const reserved = reservedByAccount(state.projects, state.contributions);
     const rows = state.accounts.filter(a => !a.archived).map(a => {
       const s = sums.find(x => x.account_id === a.id);
       const vis = state.visible.has(a.id);
+      const res = reserved.get(a.id) || 0;
       return `<li><div><b>${esc(a.alias)}</b><small>${BANK_LABEL[a.bank]} · ${esc(ownerName(a))}${vis ? '' : ' · solo totales'}</small>
-        ${vis ? '' : `<small>Ingresos ${eur(+s?.income || 0)} · Gastos ${eur(+s?.expense || 0)}</small>`}</div>
+        ${vis ? '' : `<small>Ingresos ${eur(+s?.income || 0)} · Gastos ${eur(+s?.expense || 0)}</small>`}
+        ${res > 0.004 ? `<small class="reserved">${eur(res)} apartados para proyectos${s?.balance != null ? ` · libre ${eur(+s.balance - res)}` : ''}</small>` : ''}</div>
         <div class="right"><b class="${+s?.balance < 0 ? 'neg' : ''}">${s?.balance != null ? eur(+s.balance) : '—'}</b>${s?.balance_date ? `<small>a ${dateLabel(s.balance_date)}</small>` : ''}</div></li>`;
     });
     box.innerHTML = `<div class="card-h"><h2>Cuentas</h2><a class="link" href="#/cuentas">Gestionar</a></div><ul class="list">${rows.join('')}</ul>`;
@@ -733,6 +739,264 @@ function chart(ser, small = false) {
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Gasto de los últimos 12 meses">${bars}</svg>`;
 }
 
+// ---------- Proyectos ----------
+const activeProjects = () => state.projects.filter(p => !p.archived);
+
+// Resultado medio mensual (ingresos − gastos) de las cuentas visibles en los meses anteriores con datos.
+function monthlyMargin() {
+  const ids = scopeAccountIds(state, 'todo');
+  const cur = todayIso().slice(0, 7);
+  const months = [1, 2, 3].map(i => addMonths(cur, -i)).filter(m => state.tx.some(t => t.date.startsWith(m) && ids.has(t.account_id)));
+  if (!months.length) return null;
+  const sumRes = months.reduce((s, m) => s + totals(txOfMonth(state, m, ids)).result, 0);
+  return { avg: sumRes / months.length, n: months.length };
+}
+
+function commitments(exceptId) {
+  const today = todayIso();
+  return activeProjects().filter(p => p.id !== exceptId).reduce((s, p) => s + (projectStats(p, state.contributions, today).needed || 0), 0);
+}
+
+function progressBar(st) {
+  return `<div class="pbar ${st.status}"><i style="width:${Math.max(st.saved > 0 ? 2 : 0, st.progress * 100)}%"></i></div>`;
+}
+
+function projectsCard() {
+  const list = activeProjects();
+  if (!list.length) return `<a class="card slim-cta" href="#/proyectos"><span>🚢 <b>Proyectos</b> · Apartad dinero para lo que queréis hacer</span>${ICON.chev}</a>`;
+  const today = todayIso();
+  return `<section class="card"><div class="card-h"><h2>Proyectos</h2><a class="link" href="#/proyectos">Ver todos</a></div>
+    <ul class="plist">${list.slice(0, 3).map(p => {
+      const st = projectStats(p, state.contributions, today);
+      return `<li><a href="#/proyecto/${p.id}"><div class="bar-top"><span>${esc(p.emoji || '🎯')} ${esc(p.name)}</span><b>${Math.round(st.progress * 100)} %</b></div>
+        ${progressBar(st)}<small class="st-${st.status}">${eur(st.saved, { decimals: false })} de ${eur(st.target, { decimals: false })} · ${STATUS_LABEL[st.status]}</small></a></li>`;
+    }).join('')}</ul></section>`;
+}
+
+function renderProyectos() {
+  setTop('Proyectos', `<button class="btn primary small" data-act="newp">+ Nuevo</button>`);
+  topbar.onclick = e => { if (e.target.closest('[data-act=newp]')) projectForm(); };
+  const today = todayIso();
+  const active = activeProjects();
+  const archived = state.projects.filter(p => p.archived);
+  const need = commitments();
+  const margin = monthlyMargin();
+  const free = margin ? margin.avg - need : null;
+  view.innerHTML = `
+    ${active.length ? `<section class="card commit">
+      <div class="commit-row"><span>Para llegar a tiempo a todo</span><b>${eur(need)}/mes</b></div>
+      ${margin ? `<div class="commit-row"><span>Resultado medio (${margin.n} mes${margin.n > 1 ? 'es' : ''}, tus cuentas y la común)</span><b class="${margin.avg < 0 ? 'neg' : ''}">${eur(margin.avg, { sign: true })}/mes</b></div>
+      <div class="commit-row total"><span>Os quedaría libre</span><b class="${free < 0 ? 'neg' : 'pos'}">${eur(free, { sign: true })}/mes</b></div>
+      ${free < 0 ? '<p class="small neg">Con el ritmo actual no llega para todos los proyectos: alarga plazos, baja importes o recorta gasto.</p>' : ''}`
+      : '<p class="muted small">Cuando importes extractos, verás aquí si vuestro resultado mensual llega para estas cuotas.</p>'}
+    </section>` : `<div class="empty card"><div class="big-emoji">🚢</div><h2>¿Qué queréis hacer?</h2><p>Un crucero, cambiar el coche, el colchón de emergencia… Ponle importe y fecha, y la app te dice cuánto apartar cada mes y si vais al día.</p><button class="btn primary" data-act="newp">Crear el primer proyecto</button></div>`}
+    ${active.map(p => projectCard(p, today)).join('')}
+    ${archived.length ? `<details class="card"><summary>Archivados (${archived.length})</summary><ul class="list">${archived.map(p => `<li><a href="#/proyecto/${p.id}">${esc(p.emoji || '🎯')} ${esc(p.name)}</a><span class="muted">${eur(projectStats(p, state.contributions, today).saved)}</span></li>`).join('')}</ul></details>` : ''}`;
+  view.onclick = e => {
+    if (e.target.closest('[data-act=newp]')) return projectForm();
+    const q = e.target.closest('[data-quick]');
+    if (q) { contributionForm(state.projects.find(p => p.id === q.dataset.quick), 1, renderProyectos); return; }
+    const o = e.target.closest('[data-open]');
+    if (o) go('#/proyecto/' + o.dataset.open);
+  };
+}
+
+function projectCard(p, today) {
+  const st = projectStats(p, state.contributions, today);
+  const acc = p.account_id ? accById(p.account_id) : null;
+  let line;
+  if (st.done) line = 'Objetivo conseguido 🎉';
+  else if (st.overdue) line = `La fecha (${dateLabel(p.deadline)}) ya pasó · faltan ${eur(st.remaining)}`;
+  else if (st.needed != null) line = `Faltan ${eur(st.remaining)} · <b>${eur(st.needed)}/mes</b> hasta ${dateLabel(p.deadline)}`;
+  else line = `Faltan ${eur(st.remaining)}`;
+  return `<div class="card pcard" data-open="${p.id}" role="link" tabindex="0">
+    <div class="pcard-h"><span class="pemoji">${esc(p.emoji || '🎯')}</span><div><b>${esc(p.name)}</b><small>${p.owner_member_id ? 'Personal' : 'Común'}${acc ? ' · en ' + esc(acc.alias) : ''}</small></div>
+      <span class="badge st-${st.status}">${STATUS_LABEL[st.status]}</span></div>
+    <div class="pamounts"><strong>${eur(st.saved)}</strong><span>de ${eur(st.target)}</span><span class="pct">${Math.round(st.progress * 100)} %</span></div>
+    ${progressBar(st)}
+    <p class="small">${line}</p>
+    ${!st.done && st.pace > 0 && st.projected ? `<p class="small muted">A tu ritmo (${eur(st.pace)}/mes) llegarías ${p.deadline && st.projected > p.deadline ? 'tarde, ' : ''}el ${dateLabel(st.projected)}</p>` : ''}
+    ${!st.done ? `<button class="btn small" data-quick="${p.id}">+ Aportar</button>` : ''}
+  </div>`;
+}
+
+function renderProyecto() {
+  const id = location.hash.split('/')[2];
+  const p = state.projects.find(x => x.id === id);
+  if (!p) { go('#/proyectos'); return; }
+  const today = todayIso();
+  const st = projectStats(p, state.contributions, today);
+  const acc = p.account_id ? accById(p.account_id) : null;
+  setTop(`${p.emoji || '🎯'} ${p.name}`, `<button class="icon-btn" data-act="editp" aria-label="Editar">✎</button>`);
+  topbar.onclick = e => { if (e.target.closest('[data-act=editp]')) projectForm(p); };
+  view.innerHTML = `<section class="card">
+      <div class="pamounts big"><strong>${eur(st.saved)}</strong><span>de ${eur(st.target)}</span><span class="pct">${Math.round(st.progress * 100)} %</span></div>
+      ${progressBar(st)}
+      <span class="badge st-${st.status}">${STATUS_LABEL[st.status]}</span>
+      <dl class="facts">
+        <div><dt>Falta</dt><dd>${eur(st.remaining)}</dd></div>
+        <div><dt>Fecha objetivo</dt><dd>${p.deadline ? dateLabel(p.deadline) : '—'}</dd></div>
+        <div><dt>Necesitas</dt><dd>${st.needed != null ? eur(st.needed) + '/mes' : '—'}</dd></div>
+        <div><dt>Tu ritmo</dt><dd>${st.pace > 0 ? eur(st.pace) + '/mes' : 'sin aportes recientes'}</dd></div>
+        <div><dt>Llegarías</dt><dd>${st.done ? 'Conseguido' : st.projected ? dateLabel(st.projected) : '—'}</dd></div>
+        <div><dt>Dónde está</dt><dd>${acc ? esc(acc.alias) : 'Sin cuenta'}</dd></div>
+      </dl>
+      ${projectChart(p, st)}
+      ${p.note ? `<p class="muted">${esc(p.note)}</p>` : ''}
+      <div class="row-btns"><button class="btn primary" data-act="add">+ Aportar</button><button class="btn" data-act="sub">− Retirar</button></div>
+    </section>
+    <section class="card"><h2>Aportaciones</h2>
+      ${st.list.length ? `<ul class="list">${[...st.list].reverse().map(c => `<li><div><b class="${+c.amount < 0 ? 'neg' : 'pos'}">${eur(+c.amount, { sign: true })}</b><small>${dateLabel(c.date)}${c.note ? ' · ' + esc(c.note) : ''}${c.created_by && c.created_by !== state.session.user.id ? ' · ' + esc(memberNameByUser(c.created_by)) : ''}</small></div><button class="link neg" data-delc="${c.id}">Quitar</button></li>`).join('')}</ul>` : '<p class="muted">Aún no hay aportaciones.</p>'}
+    </section>`;
+  view.onclick = async e => {
+    const a = e.target.closest('[data-act]');
+    if (a?.dataset.act === 'add') return contributionForm(p, 1, renderProyecto);
+    if (a?.dataset.act === 'sub') return contributionForm(p, -1, renderProyecto);
+    const d = e.target.closest('[data-delc]');
+    if (d && await confirmBox('¿Quitar esta aportación?', 'Quitar')) {
+      await busy(null, async () => {
+        await api.remove('project_contributions', d.dataset.delc);
+        state.contributions = state.contributions.filter(c => c.id !== d.dataset.delc);
+        renderProyecto();
+      });
+    }
+  };
+}
+
+function memberNameByUser(uid) {
+  return state.members.find(m => m.user_id === uid)?.name ?? '';
+}
+
+// Gráfico: lo ahorrado acumulado frente al ritmo ideal hasta la fecha objetivo.
+function projectChart(p, st) {
+  if (!st.list.length && !p.deadline) return '';
+  const W = 320, H = 130, L = 6, R = 6, T = 10, B = 20;
+  const start = Date.parse(p.start_date);
+  const endIso = [p.deadline, st.projected, todayIso()].filter(Boolean).sort().at(-1);
+  const end = Math.max(Date.parse(endIso), start + 30 * 86400000);
+  const x = d => L + ((Date.parse(d) - start) / (end - start)) * (W - L - R);
+  const max = Math.max(+p.target, st.saved) * 1.05;
+  const y = v => T + (1 - v / max) * (H - T - B);
+  let acc = 0;
+  const pts = [[x(p.start_date), y(0)]];
+  for (const c of st.list) { pts.push([x(c.date), y(acc)]); acc += +c.amount; pts.push([x(c.date), y(acc)]); }
+  pts.push([x(todayIso()), y(acc)]);
+  const path = pts.map((q, i) => `${i ? 'L' : 'M'}${q[0].toFixed(1)} ${q[1].toFixed(1)}`).join('');
+  return `<svg class="pchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Ahorro acumulado frente al objetivo">
+    <line x1="${L}" x2="${W - R}" y1="${y(+p.target)}" y2="${y(+p.target)}" class="goal"/>
+    <text x="${W - R}" y="${y(+p.target) - 4}" text-anchor="end">Objetivo ${eur(+p.target, { decimals: false })}</text>
+    ${p.deadline ? `<line x1="${x(p.start_date)}" y1="${y(0)}" x2="${x(p.deadline)}" y2="${y(+p.target)}" class="ideal"/><text x="${x(p.deadline)}" y="${H - 6}" text-anchor="end">${dateLabel(p.deadline)}</text>` : ''}
+    <path d="${path}" class="real"/>
+    <text x="${L}" y="${H - 6}">${dateLabel(p.start_date)}</text>
+  </svg><p class="legend small muted"><i class="lg real"></i>Ahorrado <i class="lg ideal"></i>Ritmo para llegar a tiempo</p>`;
+}
+
+function contributionForm(p, sign, after) {
+  const s = sheet(`<h2>${sign > 0 ? 'Aportar a' : 'Retirar de'} ${esc(p.name)}</h2>
+    <form class="form" id="cf">
+      <label class="amount">Importe<input name="amount" inputmode="decimal" placeholder="0,00" required autocomplete="off"></label>
+      <label>Fecha<input type="date" name="date" value="${todayIso()}" required></label>
+      <label>Nota<input name="note" placeholder="${sign > 0 ? 'Opcional (p. ej. paga extra)' : '¿Para qué?'}"></label>
+      ${p.account_id ? `<p class="hint small">Recuerda mover el dinero de verdad ${sign > 0 ? 'a' : 'desde'} ${esc(accById(p.account_id)?.alias ?? 'su cuenta')}.</p>` : ''}
+      <button class="btn primary block">${sign > 0 ? 'Aportar' : 'Retirar'}</button></form>`);
+  const f = $('#cf', s.el);
+  setTimeout(() => f.amount.focus(), 50);
+  f.onsubmit = e => {
+    e.preventDefault();
+    busy(f.querySelector('.primary'), async () => {
+      const n = Math.abs(Number(f.amount.value.replace(/\./g, '').replace(',', '.')));
+      if (!n) throw new Error('Importe no válido.');
+      const before = projectStats(p, state.contributions, todayIso());
+      const row = await api.insert('project_contributions', {
+        household_id: state.household.id, project_id: p.id, date: f.date.value, amount: sign * n, note: f.note.value.trim() || null,
+      });
+      state.contributions.push(row);
+      const after_ = projectStats(p, state.contributions, todayIso());
+      s.close();
+      toast(!before.done && after_.done ? `🎉 ¡${p.name}: objetivo conseguido!` : sign > 0 ? `+${eur(n)} · llevas ${Math.round(after_.progress * 100)} %` : 'Retirada anotada');
+      after();
+    });
+  };
+}
+
+function projectForm(p = null) {
+  const accs = myAccounts();
+  const s = sheet(`<h2>${p ? 'Editar proyecto' : 'Nuevo proyecto'}</h2>
+    <form class="form" id="pf">
+      <div class="emojis">${EMOJIS.map(e => `<label><input type="radio" name="emoji" value="${e}" ${(p?.emoji || '🚢') === e ? 'checked' : ''}><span>${e}</span></label>`).join('')}</div>
+      <label>Nombre<input name="name" value="${esc(p?.name ?? '')}" placeholder="Crucero por el Mediterráneo" required></label>
+      <div class="two"><label>Importe objetivo<input name="target" inputmode="decimal" value="${p ? String(p.target).replace('.', ',') : ''}" placeholder="4.000" required></label>
+      <label>Fecha objetivo<input type="date" name="deadline" value="${p?.deadline ?? ''}"></label></div>
+      <label>Dónde estará el dinero<select name="account"><option value="">Sin cuenta concreta</option>${accs.map(a => `<option value="${a.id}" ${p?.account_id === a.id ? 'selected' : ''}>${esc(a.alias)}</option>`).join('')}</select></label>
+      ${p ? '' : `<label>De quién<select name="owner"><option value="comun">Común (lo veis los dos)</option><option value="mio">Solo mío</option></select></label>
+      <label>Ya tenéis ahorrado (opcional)<input name="initial" inputmode="decimal" placeholder="0"></label>`}
+      <label>Nota<input name="note" value="${esc(p?.note ?? '')}" placeholder="Opcional"></label>
+      <div id="pprev" class="hint small" hidden></div>
+      <div class="row-btns">${p ? `<button type="button" class="btn ghost" data-arch>${p.archived ? 'Desarchivar' : 'Archivar'}</button><button type="button" class="btn danger ghost" data-del>Eliminar</button>` : ''}<button class="btn primary">${p ? 'Guardar' : 'Crear proyecto'}</button></div>
+    </form>`);
+  const f = $('#pf', s.el);
+  const num = v => Math.abs(Number(String(v || '').replace(/\./g, '').replace(',', '.'))) || 0;
+
+  // Vista previa: cuánto supone al mes y cómo queda el margen
+  const preview = () => {
+    const box = $('#pprev', s.el);
+    const target = num(f.target.value);
+    if (!target || !f.deadline.value) { box.hidden = true; return; }
+    const saved = p ? projectStats(p, state.contributions, todayIso()).saved : num(f.initial?.value);
+    const months = Math.max(1, (Date.parse(f.deadline.value) - Date.now()) / (30.4375 * 86400000));
+    const need = Math.max(0, target - saved) / months;
+    const others = commitments(p?.id);
+    const margin = monthlyMargin();
+    box.hidden = false;
+    box.innerHTML = `Supone <b>${eur(need)}/mes</b> durante ${Math.round(months)} meses.` +
+      (others > 0 ? ` Con los demás proyectos: ${eur(need + others)}/mes.` : '') +
+      (margin ? ` Vuestro resultado medio es ${eur(margin.avg, { sign: true })}/mes: quedaría <b class="${margin.avg - need - others < 0 ? 'neg' : 'pos'}">${eur(margin.avg - need - others, { sign: true })}/mes</b> libre.` : '');
+  };
+  f.oninput = preview;
+  preview();
+
+  s.el.querySelector('[data-arch]')?.addEventListener('click', () => busy(null, async () => {
+    Object.assign(p, await api.update('projects', p.id, { archived: !p.archived }));
+    s.close(); go('#/proyectos');
+  }));
+  s.el.querySelector('[data-del]')?.addEventListener('click', async () => {
+    if (!await confirmBox(`Se borrará «${p.name}» y sus aportaciones. Si solo está terminado, mejor archívalo.`, 'Eliminar')) return;
+    await busy(null, async () => {
+      await api.remove('projects', p.id);
+      state.projects = state.projects.filter(x => x.id !== p.id);
+      state.contributions = state.contributions.filter(c => c.project_id !== p.id);
+      s.close(); go('#/proyectos');
+    });
+  });
+  f.onsubmit = e => {
+    e.preventDefault();
+    busy(f.querySelector('.primary'), async () => {
+      const target = num(f.target.value);
+      if (!target) throw new Error('Pon un importe objetivo.');
+      const data = {
+        name: f.name.value.trim(), emoji: f.querySelector('[name=emoji]:checked')?.value ?? null, target,
+        deadline: f.deadline.value || null, account_id: f.account.value || null, note: f.note.value.trim() || null,
+      };
+      if (p) {
+        Object.assign(p, await api.update('projects', p.id, data));
+        s.close(); route();
+        return;
+      }
+      const row = await api.insert('projects', {
+        ...data, household_id: state.household.id, owner_member_id: f.owner.value === 'mio' ? state.me.id : null, start_date: todayIso(),
+      });
+      state.projects.push(row);
+      const initial = num(f.initial.value);
+      if (initial) {
+        state.contributions.push(await api.insert('project_contributions', {
+          household_id: state.household.id, project_id: row.id, date: todayIso(), amount: initial, note: 'Lo que ya teníais ahorrado', is_initial: true,
+        }));
+      }
+      s.close(); toast('Proyecto creado'); go('#/proyecto/' + row.id);
+    });
+  };
+}
+
 // ---------- Más ----------
 function renderMas() {
   setTop('Más');
@@ -760,7 +1024,7 @@ function renderMas() {
       const data = {
         exportado: new Date().toISOString(), version: APP_VERSION, hogar: state.household, miembros: state.members,
         cuentas: state.accounts.filter(x => state.visible.has(x.id)), categorias: state.categories, reglas: state.rules,
-        movimientos: state.tx,
+        movimientos: state.tx, proyectos: state.projects, aportaciones: state.contributions,
       };
       download(`finanzas-copia-${todayIso()}.json`, JSON.stringify(data, null, 1));
       toast('Copia descargada');
@@ -970,6 +1234,7 @@ const ICON = {
   home: svg('<path d="M3 11l9-7 9 7v9H3z"/><path d="M9 20v-6h6v6"/>'),
   save: svg('<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>'),
   out: svg('<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>'),
+  gear: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
 };
 
 // ---------- Arranque ----------

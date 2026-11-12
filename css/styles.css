@@ -282,3 +282,56 @@ details.cat[open] summary { margin-bottom: 8px; }
 .spin { width: 18px; height: 18px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; display: inline-block; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (min-width: 560px) { .kpis { grid-template-columns: 1fr 1fr 1fr; } .kpi.wide { grid-column: auto; } .kpi.wide strong { font-size: 1.35rem; } }
+
+/* Proyectos */
+.pbar { height: 10px; background: var(--bar-soft); border-radius: 99px; overflow: hidden; margin: 6px 0 4px; }
+.pbar i { display: block; height: 100%; border-radius: 99px; background: var(--bar); transition: width .4s; }
+.pbar.warn i { background: #d48a12; }
+.pbar.bad i { background: var(--neg); }
+.pbar.done i { background: var(--pos); }
+.badge { display: inline-block; font-size: .75rem; font-weight: 700; padding: 3px 9px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+.badge.st-warn { background: var(--warn-bg); color: var(--warn-ink); }
+.badge.st-bad { background: color-mix(in srgb, var(--neg) 14%, transparent); color: var(--neg); }
+.badge.st-done { background: color-mix(in srgb, var(--pos) 16%, transparent); color: var(--pos); }
+.badge.st-sinplazo { background: var(--bg); color: var(--muted); }
+small.st-warn { color: var(--warn-ink); } small.st-bad { color: var(--neg); } small.st-done { color: var(--pos); } small.st-ok, small.st-sinplazo { color: var(--muted); }
+.pcard { display: block; color: var(--ink); text-decoration: none; cursor: pointer; }
+.pcard p { margin: 4px 0; }
+.pcard .btn { margin-top: 8px; }
+.pcard-h { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.pcard-h > div { flex: 1; display: grid; min-width: 0; }
+.pcard-h small { color: var(--muted); font-size: .82rem; }
+.pemoji { font-size: 1.8rem; line-height: 1; }
+.pamounts { display: flex; align-items: baseline; gap: 6px; }
+.pamounts strong { font-size: 1.4rem; }
+.pamounts span { color: var(--muted); }
+.pamounts .pct { margin-left: auto; font-weight: 700; color: var(--ink); }
+.pamounts.big strong { font-size: 2rem; }
+.facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin: 14px 0 6px; }
+.facts div { display: grid; }
+.facts dt { font-size: .78rem; color: var(--muted); }
+.facts dd { margin: 0; font-weight: 600; }
+.pchart { width: 100%; height: auto; display: block; margin-top: 12px; }
+.pchart .goal { stroke: var(--muted); stroke-dasharray: 4 4; stroke-width: 1; }
+.pchart .ideal { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 2 3; }
+.pchart .real { fill: none; stroke: var(--accent); stroke-width: 2.4; stroke-linejoin: round; }
+.pchart text { font-size: 9px; fill: var(--muted); }
+.legend { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; }
+.lg { display: inline-block; width: 16px; height: 0; border-top: 2.4px solid var(--accent); }
+.lg.ideal { border-top: 1.5px dashed var(--muted); margin-left: 10px; }
+.emojis { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.emojis label { margin: 0; }
+.emojis input { position: absolute; opacity: 0; pointer-events: none; }
+.emojis span { display: grid; place-items: center; width: 44px; height: 44px; font-size: 1.4rem; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; }
+.emojis input:checked + span { border: 2px solid var(--accent); background: var(--accent-soft); }
+.commit-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; }
+.commit-row span { color: var(--muted); font-size: .92rem; }
+.commit-row.total { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 10px; }
+.commit-row.total span { color: var(--ink); font-weight: 600; }
+.plist { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.plist a { color: var(--ink); text-decoration: none; display: block; }
+.plist small { font-size: .8rem; }
+.slim-cta { display: flex; justify-content: space-between; align-items: center; color: var(--ink); text-decoration: none; }
+.reserved { color: var(--accent) !important; }
+.big-emoji { font-size: 3rem; }
+.top-right { display: flex; gap: 8px; }

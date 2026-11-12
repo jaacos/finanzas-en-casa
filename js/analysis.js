@@ -1,5 +1,6 @@
 // Cálculos de análisis. Gasto en positivo (importe del banco con signo cambiado).
 import { addMonths, monthLabel, eur, pct, BANK_LABEL } from './ui.js';
+import { projectStats, STATUS_LABEL } from './projects.js';
 
 export function scopeAccountIds(state, scope) {
   const me = state.me.id;
@@ -155,6 +156,18 @@ export function summaryText(state, ym, scope, summaries) {
     for (const s of subs.items.filter(s => s.cur > 0)) {
       const mers = breakdown(state, ids, ym, { cat: c.key, sub: s.key }).items.filter(m => m.cur > 0).slice(0, 5);
       L.push(`    · ${s.label}: ${eur(s.cur)} — ${mers.map(m => `${m.label} ${eur(m.cur)} (${m.count} mov.)`).join('; ')}`);
+    }
+  }
+  const projs = (state.projects || []).filter(p => !p.archived);
+  if (projs.length) {
+    L.push('');
+    L.push('PROYECTOS DE AHORRO:');
+    const today = new Date().toISOString().slice(0, 10);
+    for (const p of projs) {
+      const st = projectStats(p, state.contributions, today);
+      L.push(`- ${p.name}: ${eur(st.saved)} de ${eur(st.target)} (${Math.round(st.progress * 100)} %)` +
+        `${p.deadline ? `, objetivo ${p.deadline}` : ''}${st.needed != null ? `, necesita ${eur(st.needed)}/mes` : ''}` +
+        `${st.pace > 0 ? `, ritmo ${eur(st.pace)}/mes` : ', sin aportes recientes'} — ${STATUS_LABEL[st.status]}`);
     }
   }
   L.push('');

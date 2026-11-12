@@ -84,14 +84,16 @@ async function seedHousehold(hid) {
 
 // ---------- Carga general ----------
 export async function loadHousehold() {
-  const [household, members, accounts, categories, rules] = await Promise.all([
+  const [household, members, accounts, categories, rules, projects, contributions] = await Promise.all([
     sb.from('households').select('*').single().then(check),
     fetchAll('members'),
     fetchAll('accounts', '*', q => q.order('created_at')),
     fetchAll('categories', '*', q => q.order('sort')),
     fetchAll('rules'),
+    fetchAll('projects', '*', q => q.order('created_at')),
+    fetchAll('project_contributions', '*', q => q.order('date')),
   ]);
-  return { household, members, accounts, categories, rules };
+  return { household, members, accounts, categories, rules, projects, contributions };
 }
 
 export async function loadTransactions() {
