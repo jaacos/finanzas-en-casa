@@ -13,7 +13,7 @@ const topbar = $('#topbar');
 const state = {
   session: null, me: null, household: null, members: [], memberById: new Map(),
   accounts: [], visible: new Set(), categories: [], catById: new Map(), rules: [], sortedRules: [],
-  tx: [], loaded: false, projects: [], contributions: [],
+  tx: [], loaded: false, projects: [], contributions: [], snapshots: [],
   month: todayIso().slice(0, 7),
   scope: lsGet('scope') || 'todo',
   path: {},
@@ -218,6 +218,8 @@ async function renderInicio() {
     if (a && periodActions(a, renderInicio)) return;
     const c = e.target.closest('[data-cat]');
     if (c) { state.path = { cat: c.dataset.cat }; go('#/analisis'); }
+    const v = e.target.closest('[data-val]');
+    if (v) valuationForm(accById(v.dataset.val), renderInicio);
   };
   topbar.onclick = e => { const g = e.target.closest('[data-go]'); if (g) go(g.dataset.go); };
 
@@ -231,6 +233,15 @@ async function renderInicio() {
       const s = sums.find(x => x.account_id === a.id);
       const vis = state.visible.has(a.id);
       const res = reserved.get(a.id) || 0;
+      if (a.kind === 'inversion' && vis) {
+        const snap = lastSnapshot(a.id, monthRange(state.month)[1]);
+        const gain = snap && snap.invested != null ? +snap.value - +snap.invested : null;
+        return `<li><div><b>${esc(a.alias)}</b><small>${BANK_LABEL[a.bank]} · ${esc(ownerName(a))} · inversión</small>
+          ${gain != null ? `<small class="${gain >= 0 ? 'pos' : 'neg'}">Aportado ${eur(+snap.invested)} · ${eur(gain, { sign: true })} (${pct(gain / +snap.invested)})</small>` : ''}
+          ${res > 0.004 ? `<small class="reserved">${eur(res)} apartados para proyectos</small>` : ''}
+          <button class="link small" data-val="${a.id}">Actualizar valor</button></div>
+          <div class="right"><b>${snap ? eur(+snap.value) : '—'}</b>${snap ? `<small>a ${dateLabel(snap.date)}</small>` : ''}</div></li>`;
+      }
       return `<li><div><b>${esc(a.alias)}</b><small>${BANK_LABEL[a.bank]} · ${esc(ownerName(a))}${vis ? '' : ' · solo totales'}</small>
         ${vis ? '' : `<small>Ingresos ${eur(+s?.income || 0)} · Gastos ${eur(+s?.expense || 0)}</small>`}
         ${res > 0.004 ? `<small class="reserved">${eur(res)} apartados para proyectos${s?.balance != null ? ` · libre ${eur(+s.balance - res)}` : ''}</small>` : ''}</div>
@@ -535,7 +546,9 @@ function renderImportar() {
   const accs = myAccounts().filter(a => a.kind !== 'inversion' && a.bank !== 'efectivo');
   if (!accs.length) { view.innerHTML = `<div class="empty card"><h2>Primero, una cuenta</h2><a class="btn primary" href="#/cuentas">Añadir cuentas</a></div>`; return; }
   const lastAcc = lsGet('lastImportAcc');
-  view.innerHTML = `<form class="card form" id="imf">
+  const inv = myAccounts().filter(a => a.kind === 'inversion');
+  view.innerHTML = `${inv.length ? `<div class="card hint-card"><p><b>Cuentas de inversión (${esc(inv.map(a => a.alias).join(', '))}):</b> no se importan. Lo que importa es su valor y lo aportado; las transferencias hacia ellas ya aparecen en la cuenta de origen como «Inversión».</p><div class="row-btns">${inv.map(a => `<button class="btn small" data-val="${a.id}">Actualizar ${esc(a.alias)}</button>`).join('')}</div></div>` : ''}
+    <form class="card form" id="imf">
       <label>Cuenta<select name="account">${accs.map(a => `<option value="${a.id}" ${a.id === lastAcc ? 'selected' : ''}>${esc(a.alias)} · ${BANK_LABEL[a.bank]}</option>`).join('')}</select></label>
       <label class="drop"><input type="file" name="file" accept=".pdf,.csv,.xls,.xlsx,application/pdf" required><span>${ICON.upload}<b>Elige el extracto</b><small>PDF, Excel o CSV. Puedes importar periodos que se solapen: no se duplica nada.</small></span></label>
       <button class="btn primary block">Analizar</button>
@@ -546,6 +559,7 @@ function renderImportar() {
       <li><b>BBVA:</b> en la web, la cuenta › Movimientos › exportar a Excel (o PDF).</li>
       <li><b>Revolut:</b> en la app, la cuenta › Extracto › Excel/CSV (o PDF), en euros.</li></ul>
       <p class="muted">Cada semana basta con el último mes: lo repetido se descarta solo.</p></details>`;
+  view.onclick = e => { const v = e.target.closest('[data-val]'); if (v) valuationForm(accById(v.dataset.val), () => toast('Valor guardado')); };
   const f = $('#imf');
   f.file.onchange = () => { const s = $('.drop b', f); s.textContent = f.file.files[0]?.name || 'Elige el extracto'; };
   f.onsubmit = e => {
@@ -573,8 +587,9 @@ async function runAnalysis(account, file, mapping) {
       <li><b>${s.clasificados}</b><span>clasificados solos</span></li>
       <li><b>${s.pendientes}</b><span>para revisar</span></li>
     </ul>
+    ${s.saldos ? `<p class="hint">${s.saldos} movimientos que ya tenías sin saldo lo recibirán de este fichero.</p>` : ''}
     ${s.manual ? `<p class="hint">${s.manual} coinciden con gastos que apuntaste a mano: se unirán (conservan tu categoría y foto).</p>` : ''}
-    ${s.nuevos + s.manual ? `<button class="btn primary block" id="commit">Importar ${s.nuevos + s.manual} movimientos</button>` : '<p class="muted">Nada nuevo que importar.</p>'}
+    ${s.nuevos + s.manual ? `<button class="btn primary block" id="commit">Importar ${s.nuevos + s.manual} movimientos</button>` : s.saldos ? '<button class="btn primary block" id="commit">Completar saldos</button>' : '<p class="muted">Nada nuevo que importar.</p>'}
   </section>`;
   $('#commit')?.addEventListener('click', e => busy(e.currentTarget, async () => {
     const r = await commitImport(state, account, file, res);
@@ -602,7 +617,7 @@ function mappingForm(account, file, table) {
     $('#hdr').onchange = e => { header = Math.max(0, +e.target.value - 1); draw(); };
     $('#mapgo').onclick = e => {
       const v = n => +box.querySelector(`[data-m=${n}]`).value;
-      const m = { header, date: v('Fecha'), desc: v('Concepto'), amount: v('Importe'), debit: v('Cargo'), credit: v('Abono'), balance: v('Saldo'), state: -1, detail: -1 };
+      const m = { header, date: v('Fecha'), desc: v('Concepto'), amount: v('Importe'), debit: v('Cargo'), credit: v('Abono'), balance: v('Saldo'), state: -1, detail: -1, product: (table[header] || []).findIndex(c => /^(producto|product)$/i.test(String(c).trim())) };
       if (m.amount < 0 && (m.debit < 0 || m.credit < 0)) return toast('Indica la columna de importe, o las de cargo y abono.');
       busy(e.currentTarget, () => runAnalysis(account, file, m));
     };
@@ -997,6 +1012,38 @@ function projectForm(p = null) {
   };
 }
 
+// ---------- Valor de cuentas de inversión ----------
+function lastSnapshot(accountId, upTo = '9999-12-31') {
+  return state.snapshots.filter(s => s.account_id === accountId && s.date <= upTo)
+    .sort((x, y) => x.date.localeCompare(y.date) || x.created_at.localeCompare(y.created_at)).at(-1) || null;
+}
+
+function valuationForm(acc, after) {
+  const prev = lastSnapshot(acc.id);
+  const hist = state.snapshots.filter(s => s.account_id === acc.id).sort((x, y) => y.date.localeCompare(x.date)).slice(0, 6);
+  const s = sheet(`<h2>${esc(acc.alias)}</h2><p class="muted">Copia los dos datos de la app del banco. Basta una vez al mes.</p>
+    <form class="form" id="vf">
+      <label>Valor de mercado<input name="value" inputmode="decimal" placeholder="${prev ? String(prev.value).replace('.', ',') : '0,00'}" required autocomplete="off"></label>
+      <label>Total aportado (invertido)<input name="invested" inputmode="decimal" placeholder="${prev?.invested != null ? String(prev.invested).replace('.', ',') : 'Opcional'}" autocomplete="off"></label>
+      <label>Fecha<input type="date" name="date" value="${todayIso()}" required></label>
+      <button class="btn primary block">Guardar</button></form>
+    ${hist.length ? `<h3 class="day">Anteriores</h3><ul class="list">${hist.map(h => `<li><span>${dateLabel(h.date)}</span><span>${eur(+h.value)}${h.invested != null ? ` <small class="muted">(aportado ${eur(+h.invested)})</small>` : ''}</span></li>`).join('')}</ul>` : ''}`);
+  const f = $('#vf', s.el);
+  const num = v => Number(String(v || '').replace(/\./g, '').replace(',', '.'));
+  setTimeout(() => f.value.focus(), 50);
+  f.onsubmit = e => {
+    e.preventDefault();
+    busy(f.querySelector('.primary'), async () => {
+      const value = num(f.value.value);
+      if (!Number.isFinite(value) || !f.value.value) throw new Error('Valor no válido.');
+      const inv = f.invested.value ? num(f.invested.value) : (prev?.invested ?? null);
+      const row = await api.insert('account_snapshots', { household_id: state.household.id, account_id: acc.id, date: f.date.value, value, invested: inv });
+      state.snapshots.push(row);
+      s.close(); after?.();
+    });
+  };
+}
+
 // ---------- Más ----------
 function renderMas() {
   setTop('Más');
@@ -1024,7 +1071,7 @@ function renderMas() {
       const data = {
         exportado: new Date().toISOString(), version: APP_VERSION, hogar: state.household, miembros: state.members,
         cuentas: state.accounts.filter(x => state.visible.has(x.id)), categorias: state.categories, reglas: state.rules,
-        movimientos: state.tx, proyectos: state.projects, aportaciones: state.contributions,
+        movimientos: state.tx, proyectos: state.projects, aportaciones: state.contributions, valoraciones: state.snapshots,
       };
       download(`finanzas-copia-${todayIso()}.json`, JSON.stringify(data, null, 1));
       toast('Copia descargada');

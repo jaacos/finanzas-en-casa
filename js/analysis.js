@@ -177,6 +177,10 @@ export function summaryText(state, ym, scope, summaries) {
     const owner = a.owner_member_id ? state.memberById.get(a.owner_member_id)?.name : 'Común';
     const visible = state.visible.has(a.id);
     let line = `- ${a.alias} (${BANK_LABEL[a.bank]}, ${owner}): saldo ${s?.balance != null ? eur(+s.balance) : 'sin dato'}`;
+    if (a.kind === 'inversion') {
+      const snap = (state.snapshots || []).filter(x => x.account_id === a.id && x.date <= `${ym}-31`).sort((x, y) => x.date.localeCompare(y.date)).at(-1);
+      line = `- ${a.alias} (inversión, ${owner}): ${snap ? `valor ${eur(+snap.value)} a ${snap.date}${snap.invested != null ? `, aportado ${eur(+snap.invested)}` : ''}` : 'sin valor anotado'}`;
+    }
     if (!visible && s) line += ` · ingresos ${eur(+s.income)} · gastos ${eur(+s.expense)} (solo totales)`;
     L.push(line);
   }

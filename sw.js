@@ -1,5 +1,5 @@
 // Cambia CACHE en cada actualización de ficheros para que los móviles descarguen la versión nueva.
-const CACHE = 'finanzas-v1.1.0';
+const CACHE = 'finanzas-v1.2.0';
 const SHELL = [
   './', 'index.html', 'css/styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/db.js', 'js/ui.js', 'js/config.js', 'js/seed.js', 'js/classify.js', 'js/parsers.js', 'js/importer.js', 'js/analysis.js', 'js/projects.js',

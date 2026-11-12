@@ -198,10 +198,14 @@ const H = {
   amount: /^(importe|amount|cantidad|importe \(?eur\)?)$/i,
   debit: /^(cargo|cargos|debe|dinero saliente|salida)$/i,
   credit: /^(abono|abonos|haber|dinero entrante|entrada)$/i,
-  balance: /^(saldo|balance|saldo \(?eur\)?)$/i,
+  balance: /^(saldo|balance|saldo \(?eur\)?|disponible|saldo disponible)$/i,
   state: /^(state|estado)$/i,
   detail: /^(observaciones|m[aá]s datos|referencia|beneficiario)$/i,
+  product: /^(producto|product)$/i,
 };
+
+// Filas de huchas/pockets (Revolut): son el otro lado de un traspaso y duplicarían el movimiento.
+const SAVINGS_PRODUCT = /ahorro|saving|pocket|hucha|b[oó]veda|vault|dep[oó]sito/i;
 
 export function guessMapping(table) {
   for (let r = 0; r < Math.min(table.length, 30); r++) {
@@ -210,7 +214,7 @@ export function guessMapping(table) {
     const date = find(H.date), desc = find(H.desc), amount = find(H.amount);
     const debit = find(H.debit), credit = find(H.credit);
     if (date >= 0 && desc >= 0 && (amount >= 0 || (debit >= 0 && credit >= 0))) {
-      return { header: r, date, desc, amount, debit, credit, balance: find(H.balance), state: find(H.state), detail: find(H.detail) };
+      return { header: r, date, desc, amount, debit, credit, balance: find(H.balance), state: find(H.state), detail: find(H.detail), product: find(H.product) };
     }
   }
   return null;
@@ -238,6 +242,7 @@ export function parseTable(table, map) {
     const date = parseAnyDate(row[map.date]);
     if (!date) continue;
     if (map.state >= 0 && /pend|revert|declin|rechaz/i.test(String(row[map.state] ?? ''))) continue;
+    if (map.product >= 0 && SAVINGS_PRODUCT.test(String(row[map.product] ?? ''))) continue;
     let amount;
     if (map.amount >= 0) amount = toNum(row[map.amount]);
     else amount = (toNum(row[map.credit]) || 0) - Math.abs(toNum(row[map.debit]) || 0);
