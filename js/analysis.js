@@ -26,7 +26,9 @@ export function totals(txs) {
     else if (t.tx_type === 'aportacion') r.contrib += a;
     else if (t.tx_type === 'pendiente') { r.pending += a; r.pendingCount++; }
   }
-  r.result = r.income - r.expense;
+  // Las aportaciones (personal ↔ común) cuentan en el resultado: salen de la cuenta personal
+  // y entran en la común. En «Todas» se compensan entre sí.
+  r.result = r.income - r.expense + r.contrib;
   return r;
 }
 
@@ -142,7 +144,7 @@ export function summaryText(state, ym, scope, summaries) {
   L.push(`Ingresos: ${eur(tt.income)} (${avgTxt(avgInc)})`);
   for (const [c, v] of incomeBreakdown(state, txs)) L.push(`  · ${c}: ${eur(v)}`);
   L.push(`Gastos: ${eur(tt.expense)} (${avgTxt(avgExp)})`);
-  L.push(`Resultado (ingresos − gastos): ${eur(tt.result, { sign: true })}`);
+  L.push(`Resultado (ingresos − gastos ± aportaciones): ${eur(tt.result, { sign: true })}`);
   if (tt.income > 0) L.push(`Tasa de ahorro: ${Math.round((tt.result / tt.income) * 100)} %`);
   if (Math.abs(tt.saved) > 0.004) L.push(`Apartado a ahorro/inversión: ${eur(tt.saved)}`);
   if (Math.abs(tt.contrib) > 0.004) L.push(`Aportaciones entre cuentas (neto): ${eur(tt.contrib, { sign: true })}`);
