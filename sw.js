@@ -1,5 +1,5 @@
 // Cambia CACHE en cada actualización de ficheros para que los móviles descarguen la versión nueva.
-const CACHE = 'finanzas-v1.5.2';
+const CACHE = 'finanzas-v1.5.3';
 const SHELL = [
   './', 'index.html', 'css/styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/db.js', 'js/ui.js', 'js/config.js', 'js/seed.js', 'js/classify.js', 'js/parsers.js', 'js/importer.js', 'js/analysis.js', 'js/projects.js',
@@ -8,7 +8,7 @@ const SHELL = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {

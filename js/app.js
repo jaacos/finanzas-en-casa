@@ -1356,6 +1356,12 @@ const ICON = {
 
 // ---------- Arranque ----------
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  // updateViaCache: 'none' → el navegador comprueba siempre si hay un sw.js nuevo.
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
+  // Cuando se activa una versión nueva, recarga una vez para mostrarla sin tener que cerrar la app.
+  if (navigator.serviceWorker.controller) {
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded) { reloaded = true; location.reload(); } });
+  }
 }
 boot().catch(e => { console.error(e); toast(e.message, 'error'); });
